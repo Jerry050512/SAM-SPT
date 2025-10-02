@@ -40,33 +40,45 @@ def get_im_gt_name_dict(datasets, flag='valid'):
 
     for i in range(len(datasets)):
         print("--->>>", flag, " dataset ",i,"/",len(datasets)," ",datasets[i]["name"],"<<<---")
-        tmp_im_list, tmp_gt_list = [], []
+        tmp_im_list, tmp_gt_list, tmp_depth_list = [], [], []
         tmp_im_list = glob(datasets[i]["im_dir"]+os.sep+'*'+datasets[i]["im_ext"])
-
         tmp_im_list.sort()
+
+        if "depth_dir" in datasets[i] and datasets[i]["depth_dir"]:
+            tmp_depth_list = [datasets[i]["depth_dir"] + os.sep + x.split(os.sep)[-1].split(datasets[i]["im_ext"])[0] + datasets[i]["depth_ext"] for x in tmp_im_list]
+            print('-depth-', datasets[i]["name"], datasets[i]["depth_dir"], ': ', len(tmp_depth_list))
+        else:
+            print('-depth-', datasets[i]["name"], ': ', 'No Depth Found')
+
         if(datasets[i]["gt_dir"]==""):
             print('-gt-', datasets[i]["name"], datasets[i]["gt_dir"], ': ', 'No Ground Truth Found')
             tmp_gt_list = []
         else:
             tmp_gt_list = [datasets[i]["gt_dir"]+os.sep+x.split(os.sep)[-1].split(datasets[i]["im_ext"])[0]+datasets[i]["gt_ext"] for x in tmp_im_list]
 
-        cache_name = f".cache/{datasets[i]['name']}.cache"
-        if not os.path.exists(cache_name):
+        if flag != 'test' and not os.path.exists(f".cache/{datasets[i]['name']}.cache"):
             tmp_im_list, tmp_gt_list = filter_data(tmp_im_list, tmp_gt_list)
-            os.makedirs(os.path.dirname(cache_name), exist_ok=True)
-            with open(cache_name, 'wb') as f:
+            os.makedirs('.cache', exist_ok=True)
+            with open(f".cache/{datasets[i]['name']}.cache", 'wb') as f:
                 pickle.dump([tmp_im_list, tmp_gt_list], f)
-        else:
-            with open(cache_name, 'rb') as f:
+        elif flag != 'test':
+            with open(f".cache/{datasets[i]['name']}.cache", 'rb') as f:
                 tmp_im_list, tmp_gt_list = pickle.load(f)
 
         print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
         print('-gt-', datasets[i]["name"],datasets[i]["gt_dir"], ': ',len(tmp_gt_list))
-        name_im_gt_list.append({"dataset_name":datasets[i]["name"],
-                                "im_path":tmp_im_list,
-                                "gt_path":tmp_gt_list,
-                                "im_ext":datasets[i]["im_ext"],
-                                "gt_ext":datasets[i]["gt_ext"]})
+
+        output_dict = {"dataset_name":datasets[i]["name"],
+                       "im_path":tmp_im_list,
+                       "gt_path":tmp_gt_list,
+                       "im_ext":datasets[i]["im_ext"],
+                       "gt_ext":datasets[i]["gt_ext"]}
+
+        if tmp_depth_list:
+            output_dict["depth_path"] = tmp_depth_list
+            output_dict["depth_ext"] = datasets[i]["depth_ext"]
+
+        name_im_gt_list.append(output_dict)
 
     return name_im_gt_list
 
@@ -93,29 +105,14 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, training
         num_workers_ = 8
 
     if training:
-        for i in range(len(name_im_gt_list)):   
-            gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms))
-            gos_datasets.append(gos_dataset)
-
+        gos_datasets = [OnlineDataset([d], transform=transforms.Compose(my_transforms)) for d in name_im_gt_list]
         gos_dataset = ConcatDataset(gos_datasets)
-        sampler = DistributedSampler(gos_dataset)
-        batch_sampler_train = torch.utils.data.BatchSampler(
-            sampler, batch_size, drop_last=True)
-        g = torch.Generator()
-        g.manual_seed(0)
-        dataloader = DataLoader(gos_dataset, batch_sampler=batch_sampler_train, num_workers=num_workers_, worker_init_fn=seed_worker, generator=g)
-
-        gos_dataloaders = dataloader
-        gos_datasets = gos_dataset
-
+        dataloader = DataLoader(gos_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers_, drop_last=True)
+        return dataloader, gos_dataset
     else:
-        for i in range(len(name_im_gt_list)):   
+        for i in range(len(name_im_gt_list)):
             gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
-            sampler = DistributedSampler(gos_dataset, shuffle=False)
-            g = torch.Generator()
-            g.manual_seed(0)
-            dataloader = DataLoader(gos_dataset, batch_size, sampler=sampler, drop_last=False, num_workers=num_workers_, worker_init_fn=seed_worker, generator=g)
-
+            dataloader = DataLoader(gos_dataset, batch_size, shuffle=False, drop_last=False, num_workers=num_workers_)
             gos_dataloaders.append(dataloader)
             gos_datasets.append(gos_dataset)
 
@@ -264,6 +261,14 @@ class OnlineDataset(Dataset):
         self.dataset["ori_gt_path"] = deepcopy(gt_path_list)
         self.dataset["im_ext"] = im_ext_list
         self.dataset["gt_ext"] = gt_ext_list
+        if "depth_path" in name_im_gt_list[0]:
+            depth_path_list = []
+            depth_ext_list = []
+            for i in range(len(name_im_gt_list)):
+                depth_path_list.extend(name_im_gt_list[i]["depth_path"])
+                depth_ext_list.extend([name_im_gt_list[i]["depth_ext"] for x in name_im_gt_list[i]["depth_path"]])
+            self.dataset["depth_path"] = depth_path_list
+            self.dataset["depth_ext"] = depth_ext_list
 
         self.eval_ori_resolution = eval_ori_resolution
 
@@ -275,12 +280,19 @@ class OnlineDataset(Dataset):
         im = io.imread(im_path)
         gt = io.imread(gt_path)
 
+        if "depth_path" in self.dataset:
+            depth_path = self.dataset["depth_path"][idx]
+            depth = io.imread(depth_path)
+            if len(depth.shape) < 3:
+                depth = depth[:, :, np.newaxis]
+            im = np.concatenate([im, depth], axis=2)
+
         if len(gt.shape) > 2:
             gt = gt[:, :, 0]
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
-        if im.shape[2] == 1:
-            im = np.repeat(im, 3, axis=2)
+        # if im.shape[2] == 1:
+        #     im = np.repeat(im, 3, axis=2)
         im = torch.tensor(im.copy(), dtype=torch.float32)
         im = torch.transpose(torch.transpose(im,1,2),0,1)
         gt = torch.unsqueeze(torch.tensor(gt, dtype=torch.float32),0)
@@ -295,9 +307,15 @@ class OnlineDataset(Dataset):
         if self.transform:
             sample = self.transform(sample)
 
+        ori_shape = torch.tensor(im.shape[-2:])
+
+        if self.transform:
+            sample = self.transform(sample)
+
         if self.eval_ori_resolution:
             sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here
             sample['ori_im_path'] = self.dataset["im_path"][idx]
             sample['ori_gt_path'] = self.dataset["gt_path"][idx]
+            sample['ori_shape'] = ori_shape
 
         return sample

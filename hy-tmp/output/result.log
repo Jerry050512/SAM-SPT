@@ -1,0 +1,5 @@
+2025-10-02 06:10:14,625 [WARNING] Checkpoint file not found at 'pretrained_checkpoint/vit_b.pth'. Starting with a fresh model.
+2025-10-02 06:11:00,502 [WARNING] Checkpoint file not found at 'pretrained_checkpoint/vit_b.pth'. Starting with a fresh model.
+2025-10-02 06:13:13,648 [WARNING] Checkpoint file not found at 'pretrained_checkpoint/vit_b.pth'. Starting with a fresh model.
+2025-10-02 06:14:30,398 [WARNING] Checkpoint file not found at 'pretrained_checkpoint/vit_b.pth'. Starting with a fresh model.
+2025-10-02 06:15:52,607 [WARNING] Checkpoint file not found at 'pretrained_checkpoint/vit_b.pth'. Starting with a fresh model.
