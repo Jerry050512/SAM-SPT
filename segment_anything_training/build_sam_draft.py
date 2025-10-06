@@ -137,6 +137,16 @@ def _build_sam(
                 new_key = key.replace("mask_decoder", "draft_decoder")
                 new_state_dict[new_key] = state_dict[key]
             new_state_dict[key] = state_dict[key]
+        
+        # 拿到预训练的权重
+        proj_weight = new_state_dict["image_encoder.patch_embed.proj.weight"]  # [768, 3, 16, 16]
+
+        # 扩展到 4 通道
+        if proj_weight.shape[1] == 3:
+            extra_channel = proj_weight.mean(dim=1, keepdim=True)  # 用平均代替D通道的初始权重
+            proj_weight_4 = torch.cat([proj_weight, extra_channel], dim=1)  # [768, 4, 16, 16]
+            new_state_dict["image_encoder.patch_embed.proj.weight"] = proj_weight_4
+
         sam.load_state_dict(new_state_dict, strict=False)
     return sam
 

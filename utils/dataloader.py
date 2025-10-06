@@ -21,18 +21,25 @@ def filter_data(im_list, gt_list):
     valids = []
     for i, gt in enumerate(gt_list):
         gt = io.imread(gt)
-        # assert(len(gt.shape) == 2)
+
+        # 如果mask是0/1，则转成0/255
+        if gt.max() == 1:
+            gt = gt * 255
+
         valid = gt.sum() > 0
         if valid:
             valids.append(i)
         else:
             continue
+
         assert(gt.max() == 255)
         assert((gt > 128).sum() > 0)
         if len(np.unique(gt)) != 2:
             print("Need to unify mask format: ", gt_list[i])
             assert(False)
+
     return [im_list[v] for v in valids], [gt_list[v] for v in valids]
+
 
 def get_im_gt_name_dict(datasets, flag='valid'):
     print("------------------------------", flag, "--------------------------------")
@@ -274,15 +281,19 @@ class OnlineDataset(Dataset):
 
     def __len__(self):
         return len(self.dataset["im_path"])
+    
     def __getitem__(self, idx):
         im_path = self.dataset["im_path"][idx]
         gt_path = self.dataset["gt_path"][idx]
-        im = io.imread(im_path)
+        im = io.imread(im_path).astype(np.float32)  # RGB -> float32
         gt = io.imread(gt_path)
 
         if "depth_path" in self.dataset:
             depth_path = self.dataset["depth_path"][idx]
-            depth = io.imread(depth_path)
+            depth = io.imread(depth_path).astype(np.float32)  # Depth -> float32
+            # 归一化 depth (0~65535 -> 0~1)，避免数值范围过大
+            if depth.max() > 1.0:
+                depth = depth / 65535.0
             if len(depth.shape) < 3:
                 depth = depth[:, :, np.newaxis]
             im = np.concatenate([im, depth], axis=2)
@@ -291,26 +302,26 @@ class OnlineDataset(Dataset):
             gt = gt[:, :, 0]
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
-        # if im.shape[2] == 1:
-        #     im = np.repeat(im, 3, axis=2)
-        im = torch.tensor(im.copy(), dtype=torch.float32)
-        im = torch.transpose(torch.transpose(im,1,2),0,1)
-        gt = torch.unsqueeze(torch.tensor(gt, dtype=torch.float32),0)
+
+        # 归一化 RGB 图像 (0~255 -> 0~1)
+        if im.max() > 1.0:
+            im = im / 255.0
+
+        # 转 tensor: [H,W,C] -> [C,H,W]
+        im = torch.tensor(im.copy(), dtype=torch.float32).permute(2,0,1)
+        gt = torch.unsqueeze(torch.tensor(gt, dtype=torch.float32), 0)
 
         sample = {
-        "imidx": torch.from_numpy(np.array(idx)),
-        "image": im,
-        "label": gt,
-        "shape": torch.tensor(im.shape[-2:]),
+            "imidx": torch.tensor(idx),
+            "image": im,
+            "label": gt,
+            "shape": torch.tensor(im.shape[-2:]),
         }
-        
+
         if self.transform:
             sample = self.transform(sample)
 
         ori_shape = torch.tensor(im.shape[-2:])
-
-        if self.transform:
-            sample = self.transform(sample)
 
         if self.eval_ori_resolution:
             sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here

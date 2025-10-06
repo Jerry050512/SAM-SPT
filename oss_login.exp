@@ -1,0 +1,25 @@
+#!/usr/bin/expect -f
+#
+# Automates 'oss login' by reading the password from the
+# OSS_PASSWORD environment variable.
+
+set timeout 30
+
+# Check if the OSS_PASSWORD environment variable is set
+if {![info exists env(OSS_PASSWORD)]} {
+    puts stderr "Error: The OSS_PASSWORD environment variable is not set."
+    exit 1
+}
+
+# Read the password from the environment variable
+set password $env(OSS_PASSWORD)
+
+spawn oss login
+
+expect "Username:"
+send "\r"
+
+expect "Password:"
+send "$password\r"
+
+expect eof

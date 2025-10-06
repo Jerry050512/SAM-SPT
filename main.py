@@ -99,7 +99,7 @@ def main(args):
             "name": "NEU-RSDDS-AUG",
             "im_dir": os.path.join(args.test_data_path, "Image_test"),
             "depth_dir": os.path.join(args.test_data_path, "Depth_test"),
-            "gt_dir": "",
+            "gt_dir": os.path.join(args.test_data_path, "GT_test"),
             "im_ext": ".bmp",
             "depth_ext": ".tiff",
             "gt_ext": ".png"
@@ -132,6 +132,7 @@ def main(args):
         lr_scheduler.step()
 
         if (epoch + 1) % args.model_save_fre == 0:
+            print("Saving model...")
             torch.save(net.state_dict(), f"{args.output}/checkpoint.pth")
 
 
@@ -183,7 +184,21 @@ def train_one_epoch(args, net, optimizer, train_dataloader, epoch):
 
         batched_output, interm_embeddings = net(batched_input, multimask_output=False)
 
-        loss = loss_masks(batched_output, labels, len(batched_output))
+        # 1. 提取所有样本的 masks (例如使用 low_res_logits) 并堆叠
+        # batched_output 是一个 list of dicts，所以我们从每个 dict 中取出 'low_res_logits'
+        # 假设 'low_res_logits' 的形状是 [1, C, H, W] 或 [M, C, H, W]，M是该样本的预测mask数量
+        # 这里假设你的模型每个输入产生一个主要的mask预测，即形状为 [1, 1, H, W]
+        pred_masks = [d['low_res_logits'] for d in batched_output]
+        src_masks = torch.cat(pred_masks, dim=0) # 沿着 batch 维度堆叠
+
+        # 2. 确保 labels (target_masks) 也是正确的形状 [B, 1, H, W]
+        target_masks = labels / 255. # 你的 labels 本身已经是 ndim=4 的 Tensor [B, C, H_gt, W_gt]，可能需要调整通道数C
+
+        # 3. 计算损失
+        loss_mask, loss_dice = loss_masks(src_masks, target_masks, len(batched_output))
+        # 注意：len(batched_output) 是正确的 num_masks (即 batch size)
+
+        loss = loss_mask + loss_dice
 
         optimizer.zero_grad()
         loss.backward()
@@ -226,6 +241,7 @@ def evaluate(args, net, test_dataloader):
 
         for i, mask in enumerate(masks):
             # Resize the mask to the original image size
+            mask = mask.float()
             mask = F.interpolate(mask, tuple(original_size[i].numpy()), mode='bilinear', align_corners=False)
             mask = (mask.squeeze() > 0).cpu().numpy().astype(np.uint8) * 255
 
