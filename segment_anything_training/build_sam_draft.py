@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import torch
-
+import os
 from functools import partial
 
 from .modeling import ImageEncoderViT, MaskDecoder, MaskDecoderDraft, PromptEncoder, TwoWayTransformer
@@ -83,6 +83,7 @@ def _build_sam(
             global_attn_indexes=encoder_global_attn_indexes,
             window_size=14,
             out_chans=prompt_embed_dim,
+            in_chans=4,
         ),
         prompt_encoder=PromptEncoder(
             embed_dim=prompt_embed_dim,
@@ -118,20 +119,34 @@ def _build_sam(
             iou_head_depth=3,
             iou_head_hidden_dim=256,
         ),
-        pixel_mean=[123.675, 116.28, 103.53],
-        pixel_std=[58.395, 57.12, 57.375],
+        pixel_mean=[123.675, 116.28, 103.53, 114.495],
+        pixel_std=[58.395, 57.12, 57.375, 57.63],
         args=args,
     )
     sam.eval()
-    if checkpoint is not None:
+    if checkpoint is not None and os.path.exists(checkpoint):
         with open(checkpoint, "rb") as f:
             state_dict = torch.load(f)
+
+        state_dict.pop('pixel_mean', None)
+        state_dict.pop('pixel_std', None)
+
         new_state_dict = {}
         for key in state_dict.keys():
             if "mask_decoder." in key:
                 new_key = key.replace("mask_decoder", "draft_decoder")
                 new_state_dict[new_key] = state_dict[key]
             new_state_dict[key] = state_dict[key]
+        
+        # 拿到预训练的权重
+        proj_weight = new_state_dict["image_encoder.patch_embed.proj.weight"]  # [768, 3, 16, 16]
+
+        # 扩展到 4 通道
+        if proj_weight.shape[1] == 3:
+            extra_channel = proj_weight.mean(dim=1, keepdim=True)  # 用平均代替D通道的初始权重
+            proj_weight_4 = torch.cat([proj_weight, extra_channel], dim=1)  # [768, 4, 16, 16]
+            new_state_dict["image_encoder.patch_embed.proj.weight"] = proj_weight_4
+
         sam.load_state_dict(new_state_dict, strict=False)
     return sam
 

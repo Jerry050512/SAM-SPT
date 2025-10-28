@@ -185,8 +185,8 @@ def loss_masks(src_masks, target_masks, num_masks, oversample_ratio=3.0):
         align_corners=False,
     ).squeeze(1)
 
-    loss_mask = sigmoid_ce_loss_jit(point_logits, point_labels, num_masks)
-    loss_dice = dice_loss_jit(point_logits, point_labels, num_masks)
+    loss_mask = sigmoid_ce_loss(point_logits, point_labels, num_masks)
+    loss_dice = dice_loss(point_logits, point_labels, num_masks)
 
     del src_masks
     del target_masks
